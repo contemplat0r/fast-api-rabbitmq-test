@@ -1,19 +1,29 @@
 import asyncio
-import json
 
-import aio_pika
-from aio_pika import Message
+from __future__ import (
+        absolute_import,
+        division,
+        print_function
+    )
+
+from functools import partial
+import json
+import os
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
 from pydantic import BaseModel
-
 from typing import List, Optional, Dict
 
-#from . import crud, models, schemas
 import pika
+
+EXCHANGE = 'exchange'
+
+ROUTING_KEY = 'exchange.tasks'
+
+DELAY = 5
 
 
 class Task(BaseModel):
@@ -21,112 +31,68 @@ class Task(BaseModel):
     title: str
     params: Optional[Dict] = None
 
-class Task(BaseModel):
-    taskid: str
-    title: str
-    params: Dict[str, str] = {}
+#class Task(BaseModel):
+#    taskid: str
+#    title: str
+#    params: Dict[str, str] = {}
 
 
 app = FastAPI()
 
-#connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-#
-#channel = connection.channel()
-#
-#channel.queue_declare(queue='hello')
+async send_task_to_executor(task: Task):
+    amqp_url = 'rabbitmq_server'
+    parameters = pika.URLParameters(amqp_url)
+    connection = pika.SelectConnection(parameters, on_open_callback=on_open) 
 
+    try:
+        connection.ioloop.start() 
+    except KeyboardInterrupt:
+        connection.close()
+        connection.ioloop.start() 
 
-#@app.post('/tasks/', response_model=str)
-#async def create_task(task: Task):
-#    connection = pika.BlockingConnection(pika.ConnectionParameters(host='rabbitmq_server'))
-#    channel = connection.channel()
-#    channel.queue_declare(queue='hello')
-#    channel.basic_publish(exchange='', routing_key='hello', body=str(task))
-#    connection.close()
-#    return "task created"
+def on_open(connection):
+    print("Connected")
+    connection.channel(on_channel_open)
 
-async def send_task_to_executor(task_description={}):
-    #connection await aio_pika.connect('amqp://guest:guest@localhost/')
-    #connection = await aio_pika.connect(host='rabbitmq_server')
-    #connection = await aio_pika.connect(host='amqp://guest:guest@rabbitmq_server:5672/')
-    print("send_task_to_executor, task_description:\n", task_description)
-    print("send_task_to_executor, type(task_description):", type(task_description))
-    print("send_task_to_executor, task_description.dict():", task_description.dict())
-    print("send_task_to_executor, type(task_description.dict()):", type(task_description.dict()))
-    print("send_task_to_executor, json.dumps(task_description.dict()):", json.dumps(task_description.dict()))
-    print("send_task_to_executor, type(json.dumps(task_description.dict())):", type(json.dumps(task_description.dict())))
-
-    #connection = await aio_pika.connect(host='amqp://guest:guest@localhost')
-    #connection = await aio_pika.connect(host='localhost')
-    #connection = await aio_pika.connect(host='localhost')
-    
-#    async with connection:
-#        routing_key = 'task_queue'
-#        channel = connection.channel()
-#        await channel.default_exchange.publish(
-#                aio_pika.Message(body="Hello {}!".format(routing_key).encode()),
-#                routing_key=routing_key
-#            )
-
-#    connection = await aio_pika.connect(host='localhost')
-#    channel = await connection.channel()
-#
-#    #message = aio_pika.Message(body=json.dumps(task_description.dict()).encode("utf-8")),
-#    message = Message(body=json.dumps(task_description.dict()).encode("utf-8")),
-#
-#    print("send_task_to_executor, type(message): ", type(message))
-#    print("send_task_to_executor, dir(message):\n", dir(message))
-#    print("send_task_to_executor, message:\n", message)
-#
-#    await channel.default_exchange.publish(
-#        message,
-#        routing_key = "task_queue"
-#    )
-
-#
-#    await connection.close()
-
-    routing_key = "task_queue"
-    connection = await aio_pika.connect(host='localhost')
-    channel = await connection.channel()
-    await channel.default_exchange.publish(
-            aio_pika.Message(body="Hello {}!".format(routing_key).encode()),
-            routing_key=routing_key
+def on_channel_open(channel):
+    print("Have channel")
+    channel.exchange_declare(
+            exchange=EXCHANGE,
+            exchange_type='fanout',
+            durable=True,
+            callback=partial(on_exchange, channel)
         )
-    await connection.close()
+
+def on_exchange(channel, frame):
+    print("Have exchange")
+    send_message(channel, 0)
+
+def send_message(channel, i):
+    msg = "Message %d" % (i,)
+    print(msg)
+
+    channel.basic_publish(
+            EXCHANGE,
+            ROUTING_KEY,
+            msg,
+            pika.BasicProperties(content_type='text/plain', delivery_mode=2)
+        )
+    channel.connection.add_timeout(
+            DELAY,
+            partial(send_message, channel, delivery_mode=2)
+        )
 
 
 @app.post('/tasks/', response_model=str)
 async def create_task(task: Task):
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host='rabbitmq_server'))
-    #connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-    channel = connection.channel()
-    channel.queue_declare(queue='task_queue')
-    channel.basic_publish(exchange='', routing_key='task_queue', body=str(task))
-    connection.close()
-    return "task created"
+    #connection = pika.BlockingConnection(pika.ConnectionParameters(host='rabbitmq_server'))
+    ##connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+    #channel = connection.channel()
+    #channel.queue_declare(queue='task_queue')
+    #channel.basic_publish(exchange='', routing_key='task_queue', body=str(task))
+    #connection.close()
+    #return "task created"
 
-#@app.post('/tasks/', response_model=str)
-#async def create_task(task: Task = Body(
-#            ...,
-#            example = {
-#                "taskid": "task1234",
-#                "title": "Example title",
-#                "params": {
-#                    "test1": "1234",
-#                    "test2": "5678"
-#                }
-#            }
-#        )
-#    ):
-#    await send_task_to_executor(task)
-#
-#    #return "task with id {} created".format(task['taskid'])
-#    return "task with id {} created".format(task.taskid)
-
-
-#async def create_task(task: Task=Body(...)):
-#
-#    await send_task_to_executor(task)
-#
-#    return "task with id {} created".format(task['taskid'])
+    task_execution_result = await send_task_to_executor(task: Task)
+    print("type(task_execution_result): ", type(task_execution_result))
+    return str(task_execution_result)
